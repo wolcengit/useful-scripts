@@ -291,17 +291,19 @@ headInfo() {
 
 if [ -n "${pid}" ]; then
     readonly ps_process_select_options="-p $pid"
+    readonly top_process_select_options="-p $pid"
 else
     readonly ps_process_select_options="-C java -C jsvc"
+    readonly top_process_select_options=""
 fi
 
-# output field: pid, thread id(lwp), pcpu, user
+# output field: pid, thread id(lwp), pcpu, user, time
 #   order by pcpu(percentage of cpu usage)
 findBusyJavaThreadsByPs() {
     # 1. sort by %cpu by ps option `--sort -pcpu`
     # 2. use wide output(unlimited width) by ps option `-ww`
     #    avoid trunk user column to username_fo+ or $uid alike
-    local -a ps_cmd_line=(ps $ps_process_select_options -wwLo pid,lwp,pcpu,user --sort -pcpu --no-headers)
+    local -a ps_cmd_line=(ps $ps_process_select_options -wwLo pid,lwp,pcpu,user,time --sort -pcpu --no-headers)
     local -r ps_out="$("${ps_cmd_line[@]}")"
     if [ -n "$store_dir" ]; then
         echo "$ps_out" | logAndCat "${ps_cmd_line[@]}" > "${store_file_prefix}$(( i + 1 ))_ps"
@@ -330,7 +332,7 @@ __top_threadId_cpu() {
     #    and use second time update data to get cpu percentage of thread in 0.5 second interval
     # 4. top v3.3, there is 1 black line between 2 update;
     #    but top v3.2, there is 2 blank lines between 2 update!
-    local -a top_cmd_line=(top -H -b -d $top_delay -n 2)
+    local -a top_cmd_line=(top $top_process_select_options -H -b -d $top_delay -n 2)
     local -r top_out=$(HOME="$tmp_store_dir" "${top_cmd_line[@]}")
     if [ -n "$store_dir" ]; then
         echo "$top_out" | logAndCat "${top_cmd_line[@]}" > "${store_file_prefix}$(( i + 1 ))_top"
@@ -352,7 +354,7 @@ __top_threadId_cpu() {
 
 __complete_pid_user_by_ps() {
     # ps output field: pid, thread id(lwp), user
-    local -a ps_cmd_line=(ps $ps_process_select_options -wwLo pid,lwp,user --no-headers)
+    local -a ps_cmd_line=(ps $ps_process_select_options -wwLo pid,lwp,user,time --no-headers)
     local -r ps_out="$("${ps_cmd_line[@]}")"
     if [ -n "$store_dir" ]; then
         echo "$ps_out" | logAndCat "${ps_cmd_line[@]}" > "${store_file_prefix}$(( i + 1 ))_ps"
@@ -365,7 +367,7 @@ __complete_pid_user_by_ps() {
         # output field: pid, threadId, pcpu, user
         local output_fields="$( echo "$ps_out" |
             awk -v "threadId=$threadId" -v "pcpu=$pcpu" '$2==threadId {
-                printf "%s %s %s %s\n", $1, threadId, pcpu, $3; exit
+                printf "%s %s %s %s %s\n", $1, threadId, pcpu, $3, $4; exit
             }' )"
         if [ -n "$output_fields" ]; then
             (( idx++ ))
@@ -380,8 +382,8 @@ findBusyJavaThreadsByTop() {
 }
 
 printStackOfThreads() {
-    local idx=0 pid threadId pcpu user
-    while read pid threadId pcpu user ; do
+    local idx=0 pid threadId pcpu user rtime
+    while read pid threadId pcpu user rtime ; do
         local threadId0x="0x`printf %x ${threadId}`"
 
         (( idx++ ))
@@ -396,20 +398,20 @@ printStackOfThreads() {
                 logAndRun sudo -u "${user}" "${jstack_cmd_line[@]}" > ${jstackFile}
             else
                 # current user is not root user, so can not run with sudo; print error message and rerun suggestion
-                redPrint "[$idx] Fail to jstack busy(${pcpu}%) thread(${threadId}/${threadId0x}) stack of java process(${pid}) under user(${user})."
+                redPrint "[$idx] Fail to jstack busy(${pcpu}%) time(${rtime}) thread(${threadId}/${threadId0x}) stack of java process(${pid}) under user(${user})."
                 redPrint "User of java process($user) is not current user($USER), need sudo to rerun:"
                 yellowPrint "    sudo ${COMMAND_LINE[@]}"
                 normalPrint
                 continue
             fi || {
-                redPrint "[$idx] Fail to jstack busy(${pcpu}%) thread(${threadId}/${threadId0x}) stack of java process(${pid}) under user(${user})."
+                redPrint "[$idx] Fail to jstack busy(${pcpu}%) time(${rtime}) thread(${threadId}/${threadId0x}) stack of java process(${pid}) under user(${user})."
                 normalPrint
                 rm "${jstackFile}" &> /dev/null
                 continue
             }
         }
 
-        bluePrint "[$idx] Busy(${pcpu}%) thread(${threadId}/${threadId0x}) stack of java process(${pid}) under user(${user}):"
+        bluePrint "[$idx] Busy(${pcpu}%) time(${rtime}) thread(${threadId}/${threadId0x}) stack of java process(${pid}) under user(${user}):"
 
         if [ -n "$mix_native_frames" ]; then
             local sed_script="/--------------- $threadId ---------------/,/^---------------/ {
@@ -449,7 +451,7 @@ main() {
         if $use_ps; then
             findBusyJavaThreadsByPs
         else
-            findBusyJavaThreadsByTop
+           findBusyJavaThreadsByTop
         fi | printStackOfThreads
     done
 }
