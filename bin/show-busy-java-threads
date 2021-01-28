@@ -310,9 +310,9 @@ findBusyJavaThreadsByPs() {
     fi
 
     if (( count > 0 )); then
-        echo "$ps_out" | head -n "${count}"
+        echo "$ps_out" | sort -r -n -k 3 | head -n "${count}"
     else
-        echo "$ps_out"
+        echo "$ps_out" | sort -r -n -k 3
     fi
 }
 
